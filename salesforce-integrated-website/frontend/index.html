@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nova Connect | Salesforce Portal</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body class="app-body">
+  <header class="topbar app-topbar">
+    <a class="brand" href="#home" data-view="home"><span class="logo">☁</span><span>Nova Connect</span></a>
+    <div class="global-search"><span>⌕</span><input id="global-search" type="search" placeholder="Search this workspace..."></div>
+    <nav class="main-nav" aria-label="Main navigation">
+      <button class="nav-link active" data-view="home">Home</button>
+      <button class="nav-link" data-view="accounts">Accounts</button>
+      <button class="nav-link" data-view="tasks">Tasks</button>
+      <button class="nav-link" data-view="reports">Reports</button>
+      <button class="nav-link" data-view="dashboards">Dashboards</button>
+      <button class="nav-link faq-nav" data-view="faq">FAQ & Help</button>
+      <button class="nav-link" data-view="admin">Support Admin</button>
+      <button class="nav-link sign-in-nav" data-view="login">Sign in</button>
+    </nav>
+  </header>
+
+  <main class="workspace">
+    <section id="view-home" class="view active-view">
+      <div class="welcome-row">
+        <div><p class="eyebrow">SALESFORCE WORKSPACE</p><h1>Good evening 👋</h1><p class="muted">Welcome to your Nova Connect dashboard.</p></div>
+        <button class="primary compact" data-view="faq">Visit Help Center ↗</button>
+      </div>
+      <section class="metric-row">
+        <article class="metric-card"><span class="metric-icon blue">▣</span><p>Open tasks</p><strong>12</strong><small>Items needing attention</small></article>
+        <article class="metric-card"><span class="metric-icon green">↗</span><p>Accounts</p><strong>48</strong><small>Managed in your workspace</small></article>
+        <article class="metric-card"><span class="metric-icon purple">▤</span><p>Reports</p><strong>8</strong><small>Ready to review</small></article>
+        <article class="metric-card"><span class="metric-icon orange">?</span><p>Help articles</p><strong id="faq-count">—</strong><small>FAQs available to you</small></article>
+      </section>
+      <section class="dashboard-grid">
+        <article class="panel performance-panel">
+          <div class="panel-heading"><div><h2>Quarterly Performance</h2><p class="muted">Overview of goals and opportunities</p></div><span class="live-pill">● Live overview</span></div>
+          <div class="chart" aria-label="Illustrative quarterly performance chart">
+            <div class="chart-y"><span>500k</span><span>400k</span><span>300k</span><span>200k</span><span>100k</span><span>0</span></div>
+            <div class="chart-area"><div class="chart-grid"><i></i><i></i><i></i><i></i><i></i><i></i></div><svg viewBox="0 0 700 230" preserveAspectRatio="none" role="img" aria-label="Illustrative upward performance trend"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#159bd7" stop-opacity=".25"/><stop offset="1" stop-color="#159bd7" stop-opacity="0"/></linearGradient></defs><path d="M0 190 C65 170 80 185 130 145 S220 160 275 115 S365 130 420 90 S520 110 565 55 S640 75 700 25 L700 230 L0 230 Z" fill="url(#fill)"/><path d="M0 190 C65 170 80 185 130 145 S220 160 275 115 S365 130 420 90 S520 110 565 55 S640 75 700 25" fill="none" stroke="#159bd7" stroke-width="4" stroke-linecap="round"/></svg><div class="month-labels"><span>Nov</span><span>Dec</span><span>Jan</span><span>Feb</span></div></div>
+          </div>
+          <div class="legend"><span><i class="dot blue-dot"></i>Closed</span><span><i class="dot green-dot"></i>Goal</span><span><i class="dot orange-dot"></i>Open opportunities</span></div>
+        </article>
+        <aside class="panel assistant-panel"><div class="panel-heading"><div><h2>Assistant</h2><p class="muted">Quick help for your workspace</p></div><span class="assistant-mark">✦</span></div><p class="assistant-copy">Need help with an account, login, or a Salesforce feature?</p><button class="secondary full" data-view="faq">Browse FAQs →</button><div class="assistant-note">Search answers from your FAQ Excel workbook.</div></aside>
+        <article class="panel mini-panel"><div class="panel-heading"><h2>Today's Events</h2><span class="panel-menu">•••</span></div><div class="empty-state"><span class="empty-icon">◷</span><p>No upcoming events to display.</p></div></article>
+        <article class="panel mini-panel"><div class="panel-heading"><h2>Today's Tasks</h2><button class="round-button" data-view="tasks">⌄</button></div><div class="task-line"><span class="check-circle">✓</span><div><strong>Review account updates</strong><small>Suggested task · Today</small></div></div><div class="task-line"><span class="check-circle">✓</span><div><strong>Check support requests</strong><small>Suggested task · Today</small></div></div></article>
+      </section>
+    </section>
+
+    <section id="view-faq" class="view">
+      <div class="page">
+        <div class="section-title-row"><div><p class="eyebrow">HELP CENTER</p><h1>Frequently Asked Questions</h1><p class="muted">Find answers from your connected FAQ knowledge base.</p></div><button class="secondary" data-view="home">← Back to Home</button></div>
+        <section class="faq-toolbar">
+          <div class="faq-searchbox"><span>⌕</span><input id="faq-search" type="search" placeholder="Search questions and answers..."></div>
+          <select id="faq-category" aria-label="Filter FAQs by category"><option value="">All categories</option></select>
+          <button id="clear-search" class="secondary" type="button">Clear</button>
+        </section>
+        <p id="faq-status" class="muted status-line" role="status">Loading FAQs…</p>
+        <section id="faq-list" class="faq-grid"></section>
+        <p id="faq-empty" class="notice hidden">No FAQs found. Try a different search.</p>
+        <p id="faq-error" class="error hidden">Could not connect to the FAQ API. Check that FastAPI is running at http://127.0.0.1:8000.</p>
+
+        <section class="panel support-panel">
+          <div class="panel-heading"><div><h2>Still need help?</h2><p class="muted">Submit a support request. It will be saved to the Excel Queries sheet.</p></div></div>
+          <form id="support-form" class="support-form">
+            <div class="support-fields">
+              <div><label for="support-name">Your name</label><input id="support-name" name="name" required maxlength="100" placeholder="Enter your name"></div>
+              <div><label for="support-email">Email address</label><input id="support-email" name="email" type="email" required maxlength="254" placeholder="you@example.com"></div>
+              <div><label for="support-phone">Phone (optional)</label><input id="support-phone" name="phone" type="tel" maxlength="30" placeholder="Phone number"></div>
+            </div>
+            <label for="support-message">How can we help?</label>
+            <textarea id="support-message" name="message" required minlength="5" maxlength="3000" rows="4" placeholder="Describe your question or issue..."></textarea>
+            <button class="primary compact" type="submit" id="support-submit">Submit support query</button>
+            <p id="support-message-status" class="message" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+      </div>
+    </section>
+
+    <section id="view-accounts" class="view placeholder-view"><div class="panel placeholder-panel"><span class="large-icon">▣</span><p class="eyebrow">WORKSPACE</p><h1>Accounts</h1><p class="muted">This dashboard section is a visual starter. Connect your Salesforce data to show real accounts here.</p><button class="primary compact" data-view="faq">Get help in FAQ</button></div></section>
+    <section id="view-tasks" class="view placeholder-view"><div class="panel placeholder-panel"><span class="large-icon">✓</span><p class="eyebrow">WORKSPACE</p><h1>Tasks</h1><p class="muted">Your task workspace. The sample tasks on Home are illustrative placeholders.</p><button class="primary compact" data-view="faq">Get help in FAQ</button></div></section>
+    <section id="view-reports" class="view placeholder-view"><div class="panel placeholder-panel"><span class="large-icon">▤</span><p class="eyebrow">WORKSPACE</p><h1>Reports</h1><p class="muted">Connect report data to replace this starter page with live analytics.</p><button class="primary compact" data-view="faq">Get help in FAQ</button></div></section>
+    <section id="view-dashboards" class="view placeholder-view"><div class="panel placeholder-panel"><span class="large-icon">▥</span><p class="eyebrow">WORKSPACE</p><h1>Dashboards</h1><p class="muted">Dashboard visuals are currently demo data inspired by your screenshot.</p><button class="primary compact" data-view="faq">Get help in FAQ</button></div></section>
+
+
+    <section id="view-admin" class="view">
+      <div class="page">
+        <div class="section-title-row">
+          <div><p class="eyebrow">SUPPORT MANAGEMENT</p><h1>Admin Support Dashboard</h1><p class="muted">Review submitted queries, search requests, and update their status. Changes are saved to the Excel Queries sheet.</p></div>
+          <button class="secondary" id="admin-refresh" type="button">↻ Refresh</button>
+        </div>
+        <div class="metric-row admin-metrics">
+          <article class="metric-card"><span class="metric-icon orange">!</span><p>Open</p><strong id="admin-open-count">—</strong><small>Waiting for review</small></article>
+          <article class="metric-card"><span class="metric-icon blue">◷</span><p>In Progress</p><strong id="admin-progress-count">—</strong><small>Being handled</small></article>
+          <article class="metric-card"><span class="metric-icon green">✓</span><p>Resolved</p><strong id="admin-resolved-count">—</strong><small>Completed requests</small></article>
+          <article class="metric-card"><span class="metric-icon purple">▤</span><p>Total Queries</p><strong id="admin-total-count">—</strong><small>All support requests</small></article>
+        </div>
+        <section class="panel admin-query-panel">
+          <div class="panel-heading"><div><h2>Support queries</h2><p class="muted">Search by name, email, message, or query ID.</p></div><span id="admin-query-status" class="muted" role="status">Loading…</span></div>
+          <div class="admin-toolbar">
+            <input id="admin-search" type="search" placeholder="Search support queries…">
+            <select id="admin-status-filter" aria-label="Filter queries by status">
+              <option value="">All statuses</option><option>Open</option><option>In Progress</option><option>Resolved</option>
+            </select>
+          </div>
+          <p id="admin-message" class="message" role="status" aria-live="polite"></p>
+          <div class="table-scroll">
+            <table class="query-table">
+              <thead><tr><th>ID</th><th>Submitted by</th><th>Contact</th><th>Query</th><th>Created</th><th>Status</th></tr></thead>
+              <tbody id="admin-query-rows"><tr><td colspan="6">Loading support queries…</td></tr></tbody>
+            </table>
+          </div>
+          <p class="admin-note">Demo note: this admin page is not protected by an administrator login. Add authentication and role checks before deploying it publicly.</p>
+        </section>
+      </div>
+    </section>
+
+    <section id="view-login" class="view">
+      <div class="auth-layout">
+        <section class="intro"><p class="eyebrow">YOUR WORKSPACE, SIMPLIFIED</p><h1>Good relationships<br><span>start here.</span></h1><p>Sign in to your portal and find answers through the integrated FAQ help center.</p></section>
+        <section class="card">
+          <h2>Welcome back</h2><p class="muted">Sign in to continue to your account.</p>
+          <form id="login-form"><label for="login-email">Email address</label><input id="login-email" type="email" required placeholder="you@example.com"><label for="login-password">Password</label><input id="login-password" type="password" required placeholder="Your password"><button class="primary" type="submit">Sign in →</button><p id="login-message" class="message" role="status"></p></form>
+          <p class="switch">New here? <button id="show-register" class="link-button" type="button">Create an account</button></p>
+          <form id="register-form" class="hidden"><h2>Create account</h2><label for="register-name">Full name</label><input id="register-name" type="text" required placeholder="Your name"><label for="register-email">Email address</label><input id="register-email" type="email" required placeholder="you@example.com"><label for="register-password">Password (minimum 8 characters)</label><input id="register-password" type="password" minlength="8" required placeholder="Create a password"><button class="primary" type="submit">Create account →</button><p id="register-message" class="message" role="status"></p><p class="switch">Already registered? <button id="show-login" class="link-button" type="button">Sign in</button></p></form>
+        </section>
+      </div>
+    </section>
+  </main>
+  <footer>Nova Connect · Salesforce-style college project · FAQ data powered by FastAPI and Excel</footer>
+</body>
+</html>
