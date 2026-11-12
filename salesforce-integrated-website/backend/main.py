@@ -12,7 +12,18 @@ from pwdlib import PasswordHash
 from starlette.middleware.sessions import SessionMiddleware
 
 from excel_store import ensure_workbooks, read_users, write_users, read_queries, read_announcements, add_query, update_query_status
-from supabase_store import (is_supabase_configured, get_faqs as get_supabase_faqs, get_faq_by_id, add_faq as add_supabase_faq, migrate_default_faqs, log_login_activity, find_chat_answer, save_chat, check_supabase)
+from supabase_store import (
+    is_supabase_configured,
+    get_faqs as get_supabase_faqs,
+    get_faq_by_id,
+    add_faq as add_supabase_faq,
+    migrate_default_faqs,
+    log_login_activity,
+    find_chat_answer,
+    save_chat,
+    check_supabase,
+    sync_excel_storage
+)
 
 load_dotenv()
 
