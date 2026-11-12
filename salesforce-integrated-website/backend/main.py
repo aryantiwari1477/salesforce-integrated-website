@@ -1,4 +1,5 @@
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -9,7 +10,8 @@ from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
 from starlette.middleware.sessions import SessionMiddleware
 
-from excel_store import ensure_workbooks, read_users, write_users, read_faqs, add_faq, read_queries, read_announcements, add_query, update_query_status
+from excel_store import ensure_workbooks, read_users, write_users, read_queries, read_announcements, add_query, update_query_status
+from supabase_store import (is_supabase_configured, get_faqs as get_supabase_faqs, get_faq_by_id, add_faq as add_supabase_faq, migrate_default_faqs, log_login_activity, find_chat_answer, save_chat, check_supabase)
 
 load_dotenv()
 
@@ -23,13 +25,16 @@ password_hash = PasswordHash.recommended()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_workbooks()
+    if is_supabase_configured():
+        check_supabase()
+        migrate_default_faqs()
     yield
 
 
 app = FastAPI(
     title="Salesforce-style Backend API",
-    description="Demo backend with login, registration, and Excel-based FAQs.",
-    version="1.0.0",
+    description="Aryan Connect API with Supabase-backed FAQs and chatbot.",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -38,7 +43,7 @@ app.add_middleware(
     allow_origins=ALLOWED_FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
 
 app.add_middleware(
@@ -66,6 +71,10 @@ class FAQCreateRequest(BaseModel):
     question: str = Field(min_length=3, max_length=300)
     answer: str = Field(min_length=2, max_length=5000)
     category: str = Field(default="General", max_length=100)
+
+
+class ChatRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=1000)
 
 
 class QueryStatusUpdateRequest(BaseModel):
@@ -97,7 +106,18 @@ def current_user(request: Request) -> dict:
 
 @app.get("/")
 def root():
-    return {"message": "Salesforce-style FastAPI backend is running", "status": "ok"}
+    return {"message": "Aryan Connect FastAPI backend is running", "status": "ok"}
+
+
+@app.get("/health")
+def health():
+    if is_supabase_configured():
+        try:
+            check_supabase()
+            return {"status": "ok", "supabase": "connected"}
+        except Exception:
+            raise HTTPException(status_code=503, detail="Supabase connection failed.")
+    return {"status": "ok", "supabase": "not_configured", "storage": "local_excel"}
 
 
 @app.post("/api/auth/register", status_code=201)
@@ -140,6 +160,16 @@ def login(payload: LoginRequest, request: Request):
 
     request.session.clear()
     request.session["user"] = public_user(user)
+    try:
+        log_login_activity(
+            name=str(user.get("name", "")),
+            email=email,
+            source="Website",
+            ip_address=request.client.host if request.client else "",
+        )
+    except Exception:
+        # Authentication should still succeed if activity logging is temporarily unavailable.
+        pass
     return {"message": "Login successful.", "user": public_user(user)}
 
 
@@ -160,33 +190,69 @@ def get_faqs(
     category: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
 ):
+    if is_supabase_configured():
+        try:
+            return get_supabase_faqs(category=category, search=search)
+        except Exception:
+            raise HTTPException(status_code=503, detail="FAQ storage is temporarily unavailable.")
+    # Local development fallback only; Render should have Supabase environment variables.
+    from excel_store import read_faqs
     faqs = read_faqs()
     if category:
-        faqs = [
-            faq for faq in faqs
-            if str(faq.get("category", "")).lower() == category.strip().lower()
-        ]
+        faqs = [f for f in faqs if str(f.get("category", "")).lower() == category.strip().lower()]
     if search:
         term = search.strip().lower()
-        faqs = [
-            faq for faq in faqs
-            if term in str(faq.get("question", "")).lower()
-            or term in str(faq.get("answer", "")).lower()
-        ]
+        faqs = [f for f in faqs if term in str(f.get("question", "")).lower()
+                or term in str(f.get("answer", "")).lower()]
     return faqs
 
 
 @app.post("/api/faqs", status_code=201)
 def create_faq(payload: FAQCreateRequest):
-    """Add an FAQ row to the FAQs sheet in data/college_data.xlsx."""
-    question = payload.question.strip()
-    answer = payload.answer.strip()
+    question, answer = payload.question.strip(), payload.answer.strip()
     if not question or not answer:
         raise HTTPException(status_code=400, detail="Question and answer are required.")
-    existing = read_faqs()
-    if any(str(item.get("question", "")).strip().lower() == question.lower() for item in existing):
-        raise HTTPException(status_code=409, detail="That FAQ question already exists.")
-    return add_faq(question, answer, payload.category)
+    try:
+        if is_supabase_configured():
+            return add_supabase_faq(question, answer, payload.category)
+        from excel_store import read_faqs, add_faq
+        if any(str(f.get("question", "")).strip().lower() == question.lower() for f in read_faqs()):
+            raise HTTPException(status_code=409, detail="That FAQ question already exists.")
+        return add_faq(question, answer, payload.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=503, detail="Unable to save FAQ. Check database configuration.")
+
+
+@app.post("/api/chat")
+def chat(payload: ChatRequest):
+    question = payload.question.strip()
+    if is_supabase_configured():
+        try:
+            answer = find_chat_answer(question)
+            save_chat(question, answer)
+            return {"question": question, "answer": answer}
+        except Exception:
+            raise HTTPException(status_code=503, detail="Chatbot storage is temporarily unavailable.")
+    from excel_store import read_faqs
+    faqs = read_faqs()
+    answer = _local_faq_answer(question, faqs)
+    return {"question": question, "answer": answer}
+
+
+def _local_faq_answer(question: str, faqs: list[dict]) -> str:
+    words = {w for w in re.findall(r"[a-z0-9]+", question.lower()) if len(w) > 2}
+    best, score = None, 0
+    for faq in faqs:
+        text = (str(faq.get("question", "")) + " " + str(faq.get("answer", ""))).lower()
+        points = sum(1 for word in words if word in text)
+        if points > score:
+            best, score = faq, points
+    return (str(best.get("answer")) if best and score else
+            "I couldn't find an exact answer in the FAQ database. Please contact the administrator.")
 
 
 @app.get("/api/queries")
@@ -228,7 +294,14 @@ def get_announcements():
 
 @app.get("/api/faqs/{faq_id}")
 def get_faq(faq_id: int):
-    faq = next((item for item in read_faqs() if str(item.get("id")) == str(faq_id)), None)
+    try:
+        if is_supabase_configured():
+            faq = get_faq_by_id(faq_id)
+        else:
+            from excel_store import read_faqs
+            faq = next((item for item in read_faqs() if str(item.get("id")) == str(faq_id)), None)
+    except Exception:
+        raise HTTPException(status_code=503, detail="FAQ storage is unavailable.")
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found.")
     return faq

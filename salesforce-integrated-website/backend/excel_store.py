@@ -1,15 +1,20 @@
+import os
+import threading
 from pathlib import Path
 from datetime import datetime
 from openpyxl import Workbook, load_workbook
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-DATABASE_FILE = DATA_DIR / "college_data.xlsx"
+# On Render, set DATA_DIR=/var/data. Locally it defaults to backend/data.
+DATA_DIR = Path(os.getenv("DATA_DIR", str(Path(__file__).resolve().parent / "data")))
+DATABASE_FILE = DATA_DIR / os.getenv("DATABASE_FILENAME", "college_data.xlsx")
+_WORKBOOK_LOCK = threading.RLock()
 
 SHEETS = {
     "Users": ["id", "name", "email", "passwordHash", "role"],
     "FAQs": ["id", "question", "answer", "category"],
     "Queries": ["id", "name", "email", "message", "status", "created_at", "phone"],
     "Announcements": ["id", "title", "message", "category", "created_at", "status"],
+    "LoginActivities": ["id", "name", "email", "source", "ip_address", "created_at"],
 }
 
 DEFAULT_FAQS = [
@@ -45,22 +50,22 @@ DEFAULT_FAQS = [
     [30, "How do I start the backend?", "Open a terminal in the backend folder, activate the intended Python environment, install requirements, then run: uvicorn main:app --reload.", "Technical Support"],
 ]
 
+
 def ensure_workbook():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not DATABASE_FILE.exists():
-        wb = Workbook()
-        default = wb.active
-        wb.remove(default)
-        for sheet_name, headers in SHEETS.items():
-            sheet = wb.create_sheet(sheet_name)
-            sheet.append(headers)
-            if sheet_name == "FAQs":
-                for row in DEFAULT_FAQS:
-                    sheet.append(row)
-        wb.save(DATABASE_FILE)
-        wb.close()
-    else:
-        # Add any missing sheets without overwriting existing data.
+    with _WORKBOOK_LOCK:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if not DATABASE_FILE.exists():
+            wb = Workbook()
+            wb.remove(wb.active)
+            for sheet_name, headers in SHEETS.items():
+                sheet = wb.create_sheet(sheet_name)
+                sheet.append(headers)
+                if sheet_name == "FAQs":
+                    for row in DEFAULT_FAQS:
+                        sheet.append(row)
+            wb.save(DATABASE_FILE)
+            wb.close()
+            return
         wb = load_workbook(DATABASE_FILE)
         changed = False
         for sheet_name, headers in SHEETS.items():
@@ -71,7 +76,7 @@ def ensure_workbook():
                     for row in DEFAULT_FAQS:
                         sheet.append(row)
                 changed = True
-        if "FAQs" in wb.sheetnames and wb["FAQs"].max_row <= 1:
+        if wb["FAQs"].max_row <= 1:
             for row in DEFAULT_FAQS:
                 wb["FAQs"].append(row)
             changed = True
@@ -79,14 +84,16 @@ def ensure_workbook():
             wb.save(DATABASE_FILE)
         wb.close()
 
+
 def read_sheet(sheet_name: str) -> list[dict]:
     ensure_workbook()
-    wb = load_workbook(DATABASE_FILE, read_only=True, data_only=True)
-    try:
-        sheet = wb[sheet_name]
-        rows = list(sheet.iter_rows(values_only=True))
-    finally:
-        wb.close()
+    with _WORKBOOK_LOCK:
+        wb = load_workbook(DATABASE_FILE, read_only=True, data_only=True)
+        try:
+            sheet = wb[sheet_name]
+            rows = list(sheet.iter_rows(values_only=True))
+        finally:
+            wb.close()
     if not rows:
         return []
     headers = [str(v).strip() if v is not None else "" for v in rows[0]]
@@ -94,100 +101,169 @@ def read_sheet(sheet_name: str) -> list[dict]:
     for row in rows[1:]:
         if not any(v is not None for v in row):
             continue
-        item = {headers[i]: (row[i] if i < len(row) and row[i] is not None else "")
-                for i in range(len(headers)) if headers[i]}
-        result.append(item)
+        result.append({
+            headers[i]: (row[i] if i < len(row) and row[i] is not None else "")
+            for i in range(len(headers)) if headers[i]
+        })
     return result
+
 
 def append_row(sheet_name: str, values: dict):
     ensure_workbook()
-    wb = load_workbook(DATABASE_FILE)
-    try:
-        sheet = wb[sheet_name]
-        headers = [cell.value for cell in sheet[1]]
-        sheet.append([values.get(header, "") for header in headers])
-        wb.save(DATABASE_FILE)
-    finally:
-        wb.close()
+    with _WORKBOOK_LOCK:
+        wb = load_workbook(DATABASE_FILE)
+        try:
+            sheet = wb[sheet_name]
+            headers = [cell.value for cell in sheet[1]]
+            sheet.append([values.get(header, "") for header in headers])
+            wb.save(DATABASE_FILE)
+        finally:
+            wb.close()
+
 
 def read_users() -> list[dict]:
     return read_sheet("Users")
 
+
 def write_users(users: list[dict]):
     ensure_workbook()
-    wb = load_workbook(DATABASE_FILE)
-    try:
-        sheet = wb["Users"]
-        sheet.delete_rows(2, max(sheet.max_row - 1, 1))
-        for item in users:
-            sheet.append([item.get(header, "") for header in SHEETS["Users"]])
-        wb.save(DATABASE_FILE)
-    finally:
-        wb.close()
+    with _WORKBOOK_LOCK:
+        wb = load_workbook(DATABASE_FILE)
+        try:
+            sheet = wb["Users"]
+            if sheet.max_row > 1:
+                sheet.delete_rows(2, sheet.max_row - 1)
+            for item in users:
+                sheet.append([item.get(header, "") for header in SHEETS["Users"]])
+            wb.save(DATABASE_FILE)
+        finally:
+            wb.close()
+
 
 def read_faqs() -> list[dict]:
     return read_sheet("FAQs")
 
+
 def read_queries() -> list[dict]:
     return read_sheet("Queries")
 
+
 def add_query(name: str, email: str, message: str, phone: str = "") -> dict:
-    """Append a support request to the Queries sheet in the Excel workbook."""
     queries = read_queries()
     next_id = max((int(item.get("id") or 0) for item in queries), default=0) + 1
     item = {
-        "id": next_id,
-        "name": name.strip(),
-        "email": email.strip().lower(),
-        "message": message.strip(),
-        "status": "Open",
+        "id": next_id, "name": name.strip(), "email": email.strip().lower(),
+        "message": message.strip(), "status": "Open",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "phone": phone.strip(),
     }
     append_row("Queries", item)
     return item
 
+
 def read_announcements() -> list[dict]:
     return read_sheet("Announcements")
+
 
 def add_faq(question: str, answer: str, category: str) -> dict:
     faqs = read_faqs()
     next_id = max((int(item.get("id") or 0) for item in faqs), default=0) + 1
-    item = {"id": next_id, "question": question.strip(), "answer": answer.strip(), "category": category.strip() or "General"}
+    item = {"id": next_id, "question": question.strip(), "answer": answer.strip(),
+            "category": category.strip() or "General"}
     append_row("FAQs", item)
     return item
 
-# Backward-compatible name used by main.py.
-def ensure_workbooks():
+
+def update_faq(faq_id: int, question: str, answer: str, category: str) -> dict | None:
     ensure_workbook()
+    with _WORKBOOK_LOCK:
+        wb = load_workbook(DATABASE_FILE)
+        try:
+            sheet = wb["FAQs"]
+            headers = [str(c.value).strip() if c.value is not None else "" for c in sheet[1]]
+            id_col = headers.index("id") + 1
+            for row_num in range(2, sheet.max_row + 1):
+                try:
+                    current_id = int(sheet.cell(row_num, id_col).value)
+                except (TypeError, ValueError):
+                    continue
+                if current_id == faq_id:
+                    values = {"question": question.strip(), "answer": answer.strip(),
+                              "category": category.strip() or "General"}
+                    for field, value in values.items():
+                        if field not in headers:
+                            raise ValueError(f"FAQs sheet is missing the {field} column.")
+                        sheet.cell(row_num, headers.index(field) + 1).value = value
+                    wb.save(DATABASE_FILE)
+                    return {"id": faq_id, **values}
+            return None
+        finally:
+            wb.close()
+
+
+def delete_faq(faq_id: int) -> bool:
+    ensure_workbook()
+    with _WORKBOOK_LOCK:
+        wb = load_workbook(DATABASE_FILE)
+        try:
+            sheet = wb["FAQs"]
+            headers = [str(c.value).strip() if c.value is not None else "" for c in sheet[1]]
+            id_col = headers.index("id") + 1
+            for row_num in range(2, sheet.max_row + 1):
+                try:
+                    current_id = int(sheet.cell(row_num, id_col).value)
+                except (TypeError, ValueError):
+                    continue
+                if current_id == faq_id:
+                    sheet.delete_rows(row_num, 1)
+                    wb.save(DATABASE_FILE)
+                    return True
+            return False
+        finally:
+            wb.close()
+
+
+def add_login_activity(name: str, email: str, source: str, ip_address: str = "") -> dict:
+    activities = read_sheet("LoginActivities")
+    next_id = max((int(item.get("id") or 0) for item in activities), default=0) + 1
+    item = {
+        "id": next_id, "name": name.strip(), "email": email.strip().lower(),
+        "source": source.strip(), "ip_address": ip_address,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    append_row("LoginActivities", item)
+    return item
 
 
 def update_query_status(query_id: int, status: str) -> dict | None:
-    """Update a support query status in the Queries sheet."""
-    allowed_statuses = {"Open", "In Progress", "Resolved"}
-    if status not in allowed_statuses:
+    allowed = {"Open", "In Progress", "Resolved"}
+    if status not in allowed:
         raise ValueError("Status must be Open, In Progress, or Resolved.")
     ensure_workbook()
-    wb = load_workbook(DATABASE_FILE)
-    try:
-        sheet = wb["Queries"]
-        headers = [str(cell.value).strip() if cell.value is not None else "" for cell in sheet[1]]
-        if "id" not in headers or "status" not in headers:
-            raise ValueError("Queries sheet must contain id and status columns.")
-        id_col = headers.index("id") + 1
-        status_col = headers.index("status") + 1
-        for row_num in range(2, sheet.max_row + 1):
-            try:
-                current_id = int(sheet.cell(row=row_num, column=id_col).value)
-            except (TypeError, ValueError):
-                continue
-            if current_id == query_id:
-                sheet.cell(row=row_num, column=status_col).value = status
-                wb.save(DATABASE_FILE)
-                return {
-                    headers[col - 1]: (sheet.cell(row=row_num, column=col).value or "")
-                    for col in range(1, len(headers) + 1)
-                }
-        return None
-    finally:
-        wb.close()
+    with _WORKBOOK_LOCK:
+        wb = load_workbook(DATABASE_FILE)
+        try:
+            sheet = wb["Queries"]
+            headers = [str(c.value).strip() if c.value is not None else "" for c in sheet[1]]
+            if "id" not in headers or "status" not in headers:
+                raise ValueError("Queries sheet must contain id and status columns.")
+            id_col, status_col = headers.index("id") + 1, headers.index("status") + 1
+            for row_num in range(2, sheet.max_row + 1):
+                try:
+                    current_id = int(sheet.cell(row_num, id_col).value)
+                except (TypeError, ValueError):
+                    continue
+                if current_id == query_id:
+                    sheet.cell(row_num, status_col).value = status
+                    wb.save(DATABASE_FILE)
+                    return {
+                        headers[col - 1]: (sheet.cell(row_num, col).value or "")
+                        for col in range(1, len(headers) + 1)
+                    }
+            return None
+        finally:
+            wb.close()
+
+
+def ensure_workbooks():
+    ensure_workbook()
