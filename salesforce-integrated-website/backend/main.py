@@ -306,3 +306,19 @@ def get_faq(faq_id: int):
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found.")
     return faq
+    @app.post("/api/sync/excel")
+def sync_excel(request: Request):
+    expected = os.getenv("SALESFORCE_API_KEY", "").strip()
+    supplied = request.headers.get("X-API-Key", "")
+
+    if not expected:
+        raise HTTPException(status_code=503, detail="Sync API key is not configured.")
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+    if not is_supabase_configured():
+        raise HTTPException(status_code=503, detail="Supabase is not configured.")
+
+    try:
+        return sync_excel_storage()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Sync failed: {type(exc).__name__}")
