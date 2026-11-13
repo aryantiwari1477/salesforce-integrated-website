@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response, Query
+from fastapi import FastAPI, HTTPException, Request, Response, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
@@ -318,9 +318,11 @@ def get_faq(faq_id: int):
         raise HTTPException(status_code=404, detail="FAQ not found.")
     return faq
 @app.post("/api/sync/excel")
-def sync_excel(request: Request):
+def sync_excel(
+    x_api_key: str = Header(default="", alias="X-API-Key")
+):
     expected = os.getenv("SALESFORCE_API_KEY", "").strip()
-    supplied = request.headers.get("X-API-Key", "")
+    supplied = x_api_key
 
     if not expected:
         raise HTTPException(status_code=503, detail="Sync API key is not configured.")
