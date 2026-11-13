@@ -197,7 +197,7 @@ def logout(request: Request, response: Response):
     return {"message": "Logged out successfully."}
 
 
-def get_faq
+
 def get_faqs(
     category: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
