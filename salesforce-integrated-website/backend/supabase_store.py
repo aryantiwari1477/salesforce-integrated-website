@@ -1,5 +1,5 @@
 import os
-from functools import lru_cache
+from functools import lru_cache 
 from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
