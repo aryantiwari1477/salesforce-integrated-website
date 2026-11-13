@@ -102,7 +102,36 @@ def save_chat(question: str, answer: str):
 
 
 def find_chat_answer(question: str) -> str:
-    
+    """Find the closest matching FAQ answer."""
+    import re
+
+    words = {
+        word for word in re.findall(r"[a-z0-9]+", question.casefold())
+        if len(word) > 2
+    }
+
+    faqs = get_faqs()
+    best_answer = None
+    best_score = 0
+
+    for faq in faqs:
+        text = (
+            str(faq.get("question", "")) + " " +
+            str(faq.get("answer", ""))
+        ).casefold()
+
+        score = sum(1 for word in words if word in text)
+
+        if score > best_score:
+            best_answer = faq.get("answer")
+            best_score = score
+
+    if best_answer and best_score:
+        return str(best_answer)
+
+    return "I couldn't find an exact answer in the FAQ database. Please contact the administrator."
+
+
 def sync_excel_storage():
     import hashlib
     import json
@@ -111,148 +140,233 @@ def sync_excel_storage():
     from openpyxl import load_workbook
 
     bucket = os.getenv("EXCEL_STORAGE_BUCKET", "aryan-connect-excel")
-    path = os.getenv("EXCEL_STORAGE_PATH", "college_data (1).xlsx")
+    path = os.getenv("EXCEL_STORAGE_PATH", "college_data.xlsx")
+
     client = _client()
 
-    # Download the existing Excel workbook from private Supabase Storage.
+    # Download Excel from Supabase Storage
     raw = client.storage.from_(bucket).download(path)
     wb = load_workbook(BytesIO(raw))
+
     if "FAQs" not in wb.sheetnames:
-        raise RuntimeError("FAQs sheet not found in Excel workbook.")
+        raise RuntimeError("FAQs sheet not found.")
 
     sheet = wb["FAQs"]
-    headers = [str(c.value).strip() if c.value else "" for c in sheet[1]]
+
+    headers = [
+        str(cell.value).strip() if cell.value else ""
+        for cell in sheet[1]
+    ]
 
     for name in ["supabase_id", "sync_hash"]:
         if name not in headers:
-            sheet.cell(1, len(headers) + 1).value = name
             headers.append(name)
+            sheet.cell(1, len(headers)).value = name
 
     def col(name):
         return headers.index(name) + 1
 
-    def value(row, name):
+    def cell_value(row, name):
         return sheet.cell(row, col(name)).value or ""
 
-    def digest(q, a, c):
-        data = [str(q).strip(), str(a).strip(), str(c or "General").strip()]
-        return hashlib.sha256(json.dumps(data).encode()).hexdigest()
+    def digest(question, answer, category):
+        data = [
+            str(question).strip(),
+            str(answer).strip(),
+            str(category or "General").strip()
+        ]
+        return hashlib.sha256(
+            json.dumps(data, ensure_ascii=False).encode()
+        ).hexdigest()
 
     result = client.table("faqs").select(
         "id,excel_id,question,answer,category,status,sync_hash"
     ).execute()
+
     db_rows = result.data or []
-    by_id = {str(x["id"]): x for x in db_rows}
-    by_excel = {str(x["excel_id"]): x for x in db_rows if x.get("excel_id") is not None}
-    by_question = {
-        str(x["question"]).strip().casefold(): x for x in db_rows
+
+    by_id = {str(row["id"]): row for row in db_rows}
+    by_excel = {
+        str(row["excel_id"]): row
+        for row in db_rows
+        if row.get("excel_id") is not None
     }
 
-    excel_ids = set()
-    imported = exported = updated_db = updated_excel = conflicts = 0
+    imported = 0
+    exported = 0
+    updated_db = 0
+    updated_excel = 0
+    conflicts = 0
+    matched_ids = set()
+
     now = datetime.now(timezone.utc).isoformat()
 
+    # Excel to Supabase
     for r in range(2, sheet.max_row + 1):
-        q, a, category = value(r, "question"), value(r, "answer"), value(r, "category")
-        if not str(q).strip() or not str(a).strip():
+
+        question = cell_value(r, "question")
+        answer = cell_value(r, "answer")
+        category = cell_value(r, "category") or "General"
+
+        if not str(question).strip() or not str(answer).strip():
             continue
 
-        excel_id = str(value(r, "id")).strip()
-        supabase_id = str(value(r, "supabase_id")).strip()
-        db = by_id.get(supabase_id) or by_excel.get(excel_id) or by_question.get(str(q).strip().casefold())
+        excel_id = str(cell_value(r, "id")).strip()
+        supabase_id = str(cell_value(r, "supabase_id")).strip()
 
+        db = (
+            by_id.get(supabase_id)
+            or by_excel.get(excel_id)
+        )
+
+        excel_hash = digest(question, answer, category)
+
+        # New Excel FAQ
         if not db:
-            h = digest(q, a, category)
             inserted = client.table("faqs").insert({
-                "question": str(q).strip(),
-                "answer": str(a).strip(),
-                "category": str(category or "General").strip(),
+                "question": str(question).strip(),
+                "answer": str(answer).strip(),
+                "category": str(category).strip(),
                 "status": "Active",
                 "excel_id": int(excel_id) if excel_id.isdigit() else None,
-                "sync_hash": h,
-                "updated_at": now,
+                "sync_hash": excel_hash,
+                "updated_at": now
             }).execute()
+
+            if not inserted.data:
+                raise RuntimeError("Could not insert Excel FAQ.")
+
             db = inserted.data[0]
             imported += 1
-        else:
-            base = db.get("sync_hash")
-            excel_hash = digest(q, a, category)
-            db_hash = digest(db.get("question"), db.get("answer"), db.get("category"))
-            if not base:
-                # First sync: preserve the live Supabase version.
-                excel_hash = db_hash
-            elif excel_hash != base and db_hash == base:
-                client.table("faqs").update({
-                    "question": str(q).strip(),
-                    "answer": str(a).strip(),
-                    "category": str(category or "General").strip(),
-                    "excel_id": int(excel_id) if excel_id.isdigit() else None,
-                    "sync_hash": excel_hash,
-                    "updated_at": now,
-                }).eq("id", db["id"]).execute()
-                db.update({"question": q, "answer": a, "category": category, "sync_hash": excel_hash})
-                updated_db += 1
-            elif db_hash != base and excel_hash == base:
-                updated_excel += 1
-            elif db_hash != base and excel_hash != base and db_hash != excel_hash:
-                conflicts += 1
-                continue
 
-            h = digest(db.get("question"), db.get("answer"), db.get("category"))
+        else:
+            base_hash = db.get("sync_hash")
+
+            db_hash = digest(
+                db.get("question"),
+                db.get("answer"),
+                db.get("category")
+            )
+
+            # First sync: establish a baseline from Supabase
+            if not base_hash:
+                excel_hash = db_hash
+                sheet.cell(r, col("question")).value = db["question"]
+                sheet.cell(r, col("answer")).value = db["answer"]
+                sheet.cell(r, col("category")).value = db.get("category") or "General"
+
+            # Excel changed, Supabase unchanged
+            elif excel_hash != base_hash and db_hash == base_hash:
+                client.table("faqs").update({
+                    "question": str(question).strip(),
+                    "answer": str(answer).strip(),
+                    "category": str(category).strip(),
+                    "sync_hash": excel_hash,
+                    "updated_at": now
+                }).eq("id", db["id"]).execute()
+
+                db.update({
+                    "question": question,
+                    "answer": answer,
+                    "category": category,
+                    "sync_hash": excel_hash
+                })
+
+                updated_db += 1
+
+            # Supabase changed, Excel unchanged
+            elif db_hash != base_hash and excel_hash == base_hash:
+                sheet.cell(r, col("question")).value = db["question"]
+                sheet.cell(r, col("answer")).value = db["answer"]
+                sheet.cell(r, col("category")).value = db.get("category") or "General"
+                updated_excel += 1
+
+            # Both changed differently
+            elif db_hash != base_hash and excel_hash != base_hash and db_hash != excel_hash:
+                conflicts += 1
+                sheet.cell(r, col("question")).value = db["question"]
+                sheet.cell(r, col("answer")).value = db["answer"]
+                sheet.cell(r, col("category")).value = db.get("category") or "General"
+
+            final_hash = digest(
+                db.get("question"),
+                db.get("answer"),
+                db.get("category")
+            )
+
             client.table("faqs").update({
                 "excel_id": int(excel_id) if excel_id.isdigit() else db.get("excel_id"),
-                "sync_hash": h,
-                "updated_at": now,
+                "sync_hash": final_hash,
+                "updated_at": now
             }).eq("id", db["id"]).execute()
-            sheet.cell(r, col("supabase_id")).value = db["id"]
-            sheet.cell(r, col("sync_hash")).value = h
 
-            if base is None or db_hash != base and excel_hash == base:
-                sheet.cell(r, col("question")).value = db.get("question")
-                sheet.cell(r, col("answer")).value = db.get("answer")
-                sheet.cell(r, col("category")).value = db.get("category") or "General"
-                sheet.cell(r, col("sync_hash")).value = h
+        final_hash = digest(
+            db.get("question"),
+            db.get("answer"),
+            db.get("category")
+        )
 
         sheet.cell(r, col("supabase_id")).value = db["id"]
-        excel_ids.add(str(db["id"]))
+        sheet.cell(r, col("sync_hash")).value = final_hash
 
-    # Export Supabase FAQs that do not yet have a matching Excel row.
+        matched_ids.add(str(db["id"]))
+
+    # Supabase to Excel
     for db in db_rows:
-        if str(db["id"]) in excel_ids:
+
+        if str(db["id"]) in matched_ids:
             continue
+
         if db.get("status") == "Inactive":
             continue
+
         new_excel_id = max(
-            [int(sheet.cell(i, col("id")).value or 0)
-             for i in range(2, sheet.max_row + 1)
-             if str(sheet.cell(i, col("id")).value or "").isdigit()]
-            + [0]
+            [
+                int(sheet.cell(i, col("id")).value or 0)
+                for i in range(2, sheet.max_row + 1)
+                if str(sheet.cell(i, col("id")).value or "").isdigit()
+            ] + [0]
         ) + 1
-        h = digest(db["question"], db["answer"], db.get("category"))
-        row = {name: "" for name in headers}
-        row.update({
+
+        h = digest(
+            db["question"],
+            db["answer"],
+            db.get("category")
+        )
+
+        new_row = {
             "id": new_excel_id,
             "question": db["question"],
             "answer": db["answer"],
             "category": db.get("category") or "General",
             "supabase_id": db["id"],
-            "sync_hash": h,
-        })
-        sheet.append([row.get(name, "") for name in headers])
+            "sync_hash": h
+        }
+
+        sheet.append([
+            new_row.get(name, "") for name in headers
+        ])
+
         client.table("faqs").update({
             "excel_id": new_excel_id,
             "sync_hash": h,
-            "updated_at": now,
+            "updated_at": now
         }).eq("id", db["id"]).execute()
+
         exported += 1
 
+    # Upload updated Excel workbook
     output = BytesIO()
     wb.save(output)
     wb.close()
+
     client.storage.from_(bucket).upload(
         path,
         output.getvalue(),
-        {"upsert": "true", "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        {
+            "upsert": "true",
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
     )
 
     return {
@@ -260,19 +374,6 @@ def sync_excel_storage():
         "excel_to_supabase": imported + updated_db,
         "supabase_to_excel": exported + updated_excel,
         "conflicts": conflicts,
-        "storage_file": path,
+        "storage_file": path
     }
-
-    """Simple FAQ matching chatbot; this is retrieval, not a generative AI model."""
-    import re
-
-    words = {word for word in re.findall(r"[a-z0-9]+", question.casefold()) if len(word) > 2}
-    faqs = get_faqs()
-    best_answer, best_score = None, 0
-    for faq in faqs:
-        haystack = (str(faq.get("question", "")) + " " + str(faq.get("answer", ""))).casefold()
-        score = sum(1 for word in words if word in haystack)
-        if score > best_score:
-            best_answer, best_score = faq.get("answer"), score
-    return (str(best_answer) if best_answer and best_score else
-            "I couldn't find an exact answer in the FAQ database. Please contact the administrator.")
+    
