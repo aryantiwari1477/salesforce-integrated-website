@@ -317,7 +317,7 @@ def get_faq(faq_id: int):
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found.")
     return faq
-    @app.post("/api/sync/excel")
+@app.post("/api/sync/excel")
 def sync_excel(request: Request):
     expected = os.getenv("SALESFORCE_API_KEY", "").strip()
     supplied = request.headers.get("X-API-Key", "")
